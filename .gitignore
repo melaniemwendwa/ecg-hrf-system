@@ -1,0 +1,28 @@
+cat > .gitignore <<'EOF'
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ECG datasets and trained models
+data/raw/
+data/processed/
+models/
+
+# Editor and system files
+.vscode/
+.DS_Store
+EOF
