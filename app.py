@@ -1,171 +1,102 @@
 
 import streamlit as st
-import plotly.graph_objects as go
-import numpy as np
-
-from src.ecg_loader import load_ecg_record
-
 
 st.set_page_config(
-    page_title="ECG HRF Analysis",
+    page_title="ECG Insight",
     page_icon="❤️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
+st.markdown("""
+<style>
+.stApp {
+    background-color: #F4F7FB;
+}
 
-@st.cache_data
-def get_ecg(record_name, duration):
-    return load_ecg_record(record_name, duration)
+.block-container {
+    max-width: 1400px;
+    padding-top: 2rem;
+}
 
+h1, h2, h3 {
+    color: #10243A;
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.title("ECG Heart Rate Fragmentation Analysis")
-st.caption(
-    "ECG signal processing and machine learning "
-    "classification research system"
+# Website navigation
+dashboard = st.Page(
+    "pages/dashboard.py",
+    title="Dashboard",
+    icon=":material/dashboard:",
+    default=True
 )
 
-st.divider()
-
-st.sidebar.header("ECG Settings")
-
-record_name = st.sidebar.selectbox(
-    "Select MIT-BIH Record",
-    ["100", "101", "102", "103", "105", "106"]
+ecg = st.Page(
+    "pages/ecg_analysis.py",
+    title="ECG Analysis",
+    icon=":material/monitor_heart:"
 )
 
-duration = st.sidebar.slider(
-    "Signal Duration (seconds)",
-    min_value=5,
-    max_value=60,
-    value=10,
-    step=5
+hrf = st.Page(
+    "pages/hrf_analysis.py",
+    title="HRF Analysis",
+    icon=":material/analytics:"
 )
 
-st.sidebar.info(
-    "Data Source: MIT-BIH Arrhythmia Database"
+classification = st.Page(
+    "pages/classification.py",
+    title="Classification",
+    icon=":material/psychology:"
 )
 
-st.subheader("ECG Signal Analysis")
+performance = st.Page(
+    "pages/performance.py",
+    title="Model Performance",
+    icon=":material/bar_chart:"
+)
 
-try:
-    with st.spinner("Loading ECG recording..."):
-        ecg = get_ecg(record_name, duration)
+about = st.Page(
+    "pages/about.py",
+    title="About",
+    icon=":material/info:"
+)
 
-    signal = ecg["signal"]
-    time = ecg["time"]
-    peaks = ecg["peaks"]
+pg = st.navigation(
+    [
+        dashboard,
+        ecg,
+        hrf,
+        classification,
+        performance,
+        about
+    ],
+    position="top"
+)
 
-    col1, col2, col3, col4 = st.columns(4)
+st.markdown("""
+<div style="
+    background: #10243A;
+    color: white;
+    padding: 20px 25px;
+    border-radius: 12px;
+    margin-bottom: 25px;
+">
+    <div style="
+        font-size: 27px;
+        font-weight: bold;
+        color: white;
+    ">
+        💚 ECG Insight
+    </div>
+    <div style="
+        font-size: 14px;
+        color: #B8D1DE;
+    ">
+        Heart Rate Fragmentation Analysis System
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    col1.metric("Record", record_name)
-    col2.metric(
-        "Sampling Rate",
-        f"{ecg['fs']} Hz"
-    )
-    col3.metric(
-        "Annotated Beats",
-        len(peaks)
-    )
-    col4.metric(
-        "Estimated Heart Rate",
-        (
-            f"{ecg['heart_rate']:.1f} BPM"
-            if ecg["heart_rate"] is not None
-            else "N/A"
-        )
-    )
-
-    st.subheader("ECG Waveform")
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter(
-            x=time,
-            y=signal,
-            mode="lines",
-            name="ECG Signal",
-            line=dict(
-                color="#2563eb",
-                width=1.5
-            )
-        )
-    )
-
-    if len(peaks) > 0:
-        fig.add_trace(
-            go.Scatter(
-                x=time[peaks],
-                y=signal[peaks],
-                mode="markers",
-                name="Annotated Beats",
-                marker=dict(
-                    color="red",
-                    size=7
-                )
-            )
-        )
-
-    fig.update_layout(
-        title=f"MIT-BIH Record {record_name}",
-        xaxis_title="Time (seconds)",
-        yaxis_title="Amplitude (mV)",
-        height=450,
-        hovermode="x unified"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    st.subheader("RR Interval Analysis")
-
-    rr = ecg["rr_intervals"]
-
-    if len(rr) > 0:
-        rr_ms = rr * 1000
-
-        fig_rr = go.Figure()
-
-        fig_rr.add_trace(
-            go.Scatter(
-                x=np.arange(1, len(rr_ms) + 1),
-                y=rr_ms,
-                mode="lines+markers",
-                name="RR Intervals"
-            )
-        )
-
-        fig_rr.update_layout(
-            xaxis_title="Interval Number",
-            yaxis_title="RR Interval (ms)",
-            height=350
-        )
-
-        st.plotly_chart(
-            fig_rr,
-            use_container_width=True
-        )
-
-        st.metric(
-            "Mean RR Interval",
-            f"{np.mean(rr_ms):.1f} ms"
-        )
-    else:
-        st.warning(
-            "Not enough beats to calculate RR intervals."
-        )
-
-    st.info(
-        "Beat locations are reference annotations, "
-        "not predictions. Rhythm classification "
-        "has not been implemented yet."
-    )
-
-except Exception as error:
-    st.error(f"Unable to load ECG: {error}")
-    st.info(
-        "Check your internet connection and "
-        "confirm that WFDB is installed."
-    )
+pg.run()
