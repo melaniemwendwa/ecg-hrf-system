@@ -1,18 +1,21 @@
 
 import numpy as np
-from scipy.signal import (
-    butter,
-    sosfiltfilt,
-    find_peaks
-)
+from scipy.signal import butter, sosfiltfilt, find_peaks
 
 
 def preprocess_ecg(signal, fs):
-    """Bandpass filter the ECG from 5 to 20 Hz."""
+    """Filter an ECG signal to emphasize QRS activity."""
+
     signal = np.asarray(signal, dtype=float)
 
-    if signal.ndim != 1 or len(signal) < int(fs * 2):
-        raise ValueError("Provide at least 2 seconds of ECG data.")
+    if signal.ndim != 1:
+        raise ValueError("ECG must be a one-dimensional signal.")
+
+    if fs <= 0:
+        raise ValueError("Sampling frequency must be positive.")
+
+    if len(signal) < 2 * fs:
+        raise ValueError("At least 2 seconds of ECG are required.")
 
     if not np.all(np.isfinite(signal)):
         raise ValueError("ECG contains invalid values.")
@@ -30,37 +33,45 @@ def preprocess_ecg(signal, fs):
 
 def detect_rpeaks(signal, fs):
     """
-    Detect R-peak candidates using a
-    Pan-Tompkins-inspired processing pipeline.
+    Pan-Tompkins-inspired baseline R-peak detector.
 
-    This is a baseline detector and requires
-    validation against reference annotations.
+    Uses filtered ECG, differentiation, squaring,
+    moving-window integration, peak candidate
+    detection, and local peak refinement.
     """
 
     filtered = preprocess_ecg(signal, fs)
 
-    # Emphasize steep QRS changes.
+    # Highlight rapid signal changes.
     derivative = np.gradient(filtered)
     squared = derivative ** 2
 
-    # Smooth with a 150 ms moving average.
-    window_size = max(1, int(0.15 * fs))
+    # Integrate using a 150 ms window.
+    window_size = max(1, int(round(0.15 * fs)))
     kernel = np.ones(window_size) / window_size
 
     integrated = np.convolve(
-        squared, kernel, mode="same"
+        squared,
+        kernel,
+        mode="same"
     )
 
-    # Signal-dependent candidate threshold.
+    # If the ECG is flat, there are no detectable peaks.
+    if np.max(integrated) <= 1e-12:
+        return {
+            "rpeaks": np.array([], dtype=int),
+            "filtered_signal": filtered,
+            "integrated_signal": integrated
+        }
+
     baseline = np.median(integrated)
-    high_level = np.percentile(integrated, 90)
+    high = np.percentile(integrated, 90)
 
-    threshold = baseline + 0.4 * (
-        high_level - baseline
-    )
+    threshold = baseline + 0.4 * (high - baseline)
 
-    # Avoid detecting two beats too close together.
-    min_distance = max(1, int(0.25 * fs))
+    # Candidate QRS complexes must be separated
+    # by at least 250 milliseconds.
+    min_distance = max(1, int(round(0.25 * fs)))
 
     candidates, _ = find_peaks(
         integrated,
@@ -72,71 +83,68 @@ def detect_rpeaks(signal, fs):
         )
     )
 
-    # Align candidates with the largest absolute
-    # filtered ECG deflection nearby.
-    search_radius = int(0.10 * fs)
-    refined_peaks = []
+    # Refine candidate locations using the
+    # largest absolute filtered ECG deflection.
+    radius = int(round(0.10 * fs))
+    refined = []
 
     for candidate in candidates:
-        start = max(0, candidate - search_radius)
-        end = min(
-            len(filtered),
-            candidate + search_radius + 1
-        )
+        start = max(0, candidate - radius)
+        end = min(len(filtered), candidate + radius + 1)
 
-        local_signal = np.abs(filtered[start:end])
-        peak = start + int(np.argmax(local_signal))
-        refined_peaks.append(peak)
+        local = np.abs(filtered[start:end])
+        peak = start + int(np.argmax(local))
 
-    refined_peaks = np.unique(
-        np.asarray(refined_peaks, dtype=int)
-    )
+        refined.append(peak)
 
-    # Enforce a final refractory interval.
+    refined = np.unique(refined)
+
+    # Enforce a refractory period after refinement.
     accepted = []
 
-    for peak in refined_peaks:
-        if not accepted:
-            accepted.append(int(peak))
-            continue
+    for peak in refined:
+        peak = int(peak)
 
-        if peak - accepted[-1] >= min_distance:
-            accepted.append(int(peak))
+        if not accepted:
+            accepted.append(peak)
+
+        elif peak - accepted[-1] >= min_distance:
+            accepted.append(peak)
+
         elif abs(filtered[peak]) > abs(
             filtered[accepted[-1]]
         ):
-            accepted[-1] = int(peak)
+            accepted[-1] = peak
 
     return {
-        "filtered_signal": filtered,
-        "integrated_signal": integrated,
         "rpeaks": np.asarray(accepted, dtype=int),
-        "threshold": threshold
+        "filtered_signal": filtered,
+        "integrated_signal": integrated
     }
 
 
-def calculate_rr_intervals(rpeaks, fs):
-    """Return consecutive RR intervals in seconds."""
-    rpeaks = np.asarray(rpeaks, dtype=int)
+def calculate_rr_intervals(peaks, fs):
+    """Calculate RR intervals in seconds."""
 
-    if len(rpeaks) < 2:
+    peaks = np.sort(np.asarray(peaks, dtype=int))
+
+    if len(peaks) < 2:
         return np.array([], dtype=float)
 
-    return np.diff(rpeaks) / fs
+    return np.diff(peaks) / fs
 
 
-def evaluate_rpeak_detection(
+def evaluate_rpeaks(
     detected,
     reference,
     fs,
     tolerance_ms=150
 ):
     """
-    Match detected beats with reference beats.
+    Compare detected peaks with reference beats.
 
-    A reference and detection can each match
-    only once. Matches must fall within the
-    specified timing tolerance.
+    Each detected peak and reference beat
+    can be matched only once.
     """
 
     detected = np.sort(np.asarray(detected, dtype=int))
@@ -149,34 +157,45 @@ def evaluate_rpeak_detection(
     tp = 0
 
     while i < len(detected) and j < len(reference):
+
         difference = detected[i] - reference[j]
 
         if abs(difference) <= tolerance:
             tp += 1
             i += 1
             j += 1
+
         elif difference < -tolerance:
             i += 1
+
         else:
             j += 1
 
     fp = len(detected) - tp
     fn = len(reference) - tp
 
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    sensitivity = tp / (tp + fn) if tp + fn else 0.0
+    precision = (
+        tp / (tp + fp)
+        if tp + fp > 0 else 0.0
+    )
+
+    sensitivity = (
+        tp / (tp + fn)
+        if tp + fn > 0 else 0.0
+    )
 
     f1 = (
         2 * precision * sensitivity /
         (precision + sensitivity)
-        if precision + sensitivity else 0.0
+        if precision + sensitivity > 0
+        else 0.0
     )
 
     return {
-        "true_positives": tp,
-        "false_positives": fp,
-        "false_negatives": fn,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
         "precision": precision,
         "sensitivity": sensitivity,
-        "f1_score": f1
+        "f1": f1
     }

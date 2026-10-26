@@ -4,6 +4,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.rpeak_detection import (
+    detect_rpeaks,
+    calculate_rr_intervals,
+    evaluate_rpeaks
+)
+
 from src.ecg_loader import (
     load_ecg_record,
     AVAILABLE_RECORDS
@@ -152,6 +158,25 @@ if source == "MIT-BIH Dataset":
         )
 
         signal = signals[:, channel_index]
+        
+        # Automatic R-peak detection
+        detection = detect_rpeaks(signal, fs)
+
+        detected_peaks = detection["rpeaks"]
+        filtered_signal = detection["filtered_signal"]
+        integrated_signal = detection["integrated_signal"]
+
+        detected_rr = calculate_rr_intervals(
+            detected_peaks,
+            fs
+        )
+
+        performance = evaluate_rpeaks(
+            detected_peaks,
+            reference_peaks,
+            fs
+        )
+
 
         # ==================================
         # SUMMARY METRICS
@@ -195,6 +220,12 @@ if source == "MIT-BIH Dataset":
             "Show reference beat annotations",
             value=True
         )
+        
+        show_detected = st.checkbox(
+            "Show automatically detected R-peaks",
+            value=True
+        )
+
 
         fig = go.Figure()
 
@@ -236,6 +267,23 @@ if source == "MIT-BIH Dataset":
                     )
                 )
             )
+        
+        # Show automatically detected R-peaks
+        if show_detected and len(detected_peaks) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=time[detected_peaks],
+                    y=signal[detected_peaks],
+                    mode="markers",
+                    name="Detected R-Peaks",
+                    marker=dict(
+                        color="#0F9F9A",
+                        size=11,
+                        symbol="circle-open",
+                        line=dict(width=2)
+                    )
+                )
+            )
 
         fig.update_layout(
             title=(
@@ -268,6 +316,120 @@ if source == "MIT-BIH Dataset":
         # ==================================
         # RR INTERVAL ANALYSIS
         # ==================================
+        
+        # ==================================
+        # AUTOMATIC DETECTION PERFORMANCE
+        # ==================================
+
+        st.subheader("Automatic R-Peak Detection")
+
+        p1, p2, p3, p4 = st.columns(4)
+
+        p1.metric(
+            "Detected Beats",
+            len(detected_peaks)
+        )
+
+        p2.metric(
+            "Sensitivity",
+            f"{performance['sensitivity'] * 100:.2f}%"
+        )
+
+        p3.metric(
+            "Precision",
+            f"{performance['precision'] * 100:.2f}%"
+        )
+
+        p4.metric(
+            "F1-Score",
+            f"{performance['f1']:.3f}"
+        )
+
+        st.caption(
+            "Detection performance is calculated using "
+            "the MIT-BIH expert annotations and a "
+            "150 ms matching tolerance."
+        )
+
+        with st.expander("View Detection Details"):
+            details = pd.DataFrame({
+                "Metric": [
+                    "True Positives",
+                    "False Positives",
+                    "False Negatives"
+                ],
+                "Count": [
+                    performance["tp"],
+                    performance["fp"],
+                    performance["fn"]
+                ]
+            })
+
+            st.dataframe(
+                details,
+                hide_index=True,
+                use_container_width=True
+            )
+
+        # ==================================
+        # SIGNAL PROCESSING GRAPHS
+        # ==================================
+
+        with st.expander("View Signal Processing"):
+
+            fig_filtered = go.Figure()
+
+            fig_filtered.add_trace(
+                go.Scatter(
+                    x=time,
+                    y=filtered_signal,
+                    mode="lines",
+                    name="Filtered ECG",
+                    line=dict(color="#0F9F9A")
+                )
+            )
+
+            fig_filtered.update_layout(
+                title="Bandpass Filtered ECG (5-20 Hz)",
+                xaxis_title="Time (seconds)",
+                yaxis_title="Filtered Amplitude (mV)",
+                template="plotly_white"
+            )
+
+            st.plotly_chart(
+                fig_filtered,
+                use_container_width=True
+            )
+
+            fig_integrated = go.Figure()
+
+            fig_integrated.add_trace(
+                go.Scatter(
+                    x=time,
+                    y=integrated_signal,
+                    mode="lines",
+                    name="QRS Enhancement",
+                    line=dict(color="#8B5CF6")
+                )
+            )
+
+            fig_integrated.update_layout(
+                title="QRS Enhancement Signal",
+                xaxis_title="Time (seconds)",
+                yaxis_title="Integrated Signal Energy",
+                template="plotly_white"
+            )
+
+            st.plotly_chart(
+                fig_integrated,
+                use_container_width=True
+            )
+
+        if len(detected_rr) > 0:
+            st.metric(
+                "Mean Automatically Detected RR Interval",
+                f"{np.mean(detected_rr) * 1000:.1f} ms"
+            )
 
         st.subheader("RR Interval Analysis")
 

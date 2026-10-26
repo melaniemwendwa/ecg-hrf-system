@@ -2,31 +2,16 @@
 import numpy as np
 
 
-def calculate_pip(
-    rr_intervals,
-    valid_mask=None,
-    resolution=0.0
-):
+def calculate_pip(rr_intervals, fs, valid_mask=None):
     """
-    Calculate Percentage of Inflection Points.
+    Calculate comparison-based PIP.
 
-    Parameters
-    ----------
-    rr_intervals : array-like
-        Consecutive RR or NN intervals in seconds.
+    rr_intervals: Consecutive intervals in seconds.
+    fs: ECG sampling frequency in Hz.
+    valid_mask: Optional Boolean mask indicating
+                eligible RR intervals.
 
-    valid_mask : array-like of bool, optional
-        True for eligible intervals.
-        Invalid intervals break the sequence.
-
-    resolution : float
-        Changes smaller than this threshold
-        are treated as zero.
-
-    Returns
-    -------
-    dict
-        PIP result and intermediate calculations.
+    Invalid intervals break the sequence.
     """
 
     rr = np.asarray(rr_intervals, dtype=float)
@@ -35,53 +20,54 @@ def calculate_pip(
         raise ValueError("RR intervals must be 1D.")
 
     if not np.all(np.isfinite(rr)):
-        raise ValueError("Invalid RR interval values.")
+        raise ValueError("RR intervals must be finite.")
 
     if np.any(rr <= 0):
         raise ValueError("RR intervals must be positive.")
 
-    if resolution < 0 or not np.isfinite(resolution):
-        raise ValueError("Invalid resolution.")
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError("Invalid sampling frequency.")
 
     if valid_mask is None:
         valid = np.ones(len(rr), dtype=bool)
     else:
         valid = np.asarray(valid_mask, dtype=bool)
 
-        if len(valid) != len(rr) or valid.ndim != 1:
-            raise ValueError(
-                "Mask must match RR interval length."
-            )
+        if valid.ndim != 1 or len(valid) != len(rr):
+            raise ValueError("Invalid interval mask length.")
 
-    # Need 3 intervals to evaluate one inflection.
+    differences = np.diff(rr)
+
+    # Classify changes according to ECG resolution.
+    # +1 = RR increased
+    # -1 = RR decreased
+    #  0 = no measurable change
+
+    resolution = 1.0 / fs
+    tolerance = resolution * 1e-6
+
+    states = np.zeros(len(differences), dtype=int)
+
+    states[differences >= resolution - tolerance] = 1
+    states[differences <= -resolution + tolerance] = -1
+
+    inflection_indices = np.array([], dtype=int)
+
     if len(rr) < 3:
         return {
             "pip": None,
-            "inflection_count": 0,
-            "comparison_count": 0,
             "hard_count": 0,
             "soft_count": 0,
-            "differences": np.diff(rr),
-            "states": np.array([], dtype=int),
-            "inflection_indices": np.array([], dtype=int)
+            "inflection_count": 0,
+            "comparison_count": 0,
+            "differences": differences,
+            "states": states,
+            "inflection_indices": inflection_indices,
+            "eligible_comparisons": np.array([], dtype=bool)
         }
 
-    # Differences between adjacent RR intervals.
-    differences = np.diff(rr)
-
-    # +1: RR increases (HR decelerates)
-    # -1: RR decreases (HR accelerates)
-    #  0: No meaningful change
-    states = np.zeros(len(differences), dtype=int)
-
-    states[differences >= resolution] = 1
-    states[differences <= -resolution] = -1
-
-    # Special handling of exact zero if resolution=0.
-    states[differences == 0] = 0
-
-    # A valid inflection requires three consecutive
-    # eligible RR intervals.
+    # Three consecutive eligible RR intervals
+    # are necessary for one PIP comparison.
     eligible = (
         valid[:-2]
         & valid[1:-1]
@@ -91,40 +77,62 @@ def calculate_pip(
     before = states[:-1]
     after = states[1:]
 
-    # A change between -1, 0, +1 is an inflection.
-    changed = before != after
+    # Hard: direction reverses
+    hard = (before * after == -1) & eligible
 
-    hard = (
-        (before * after == -1)
-        & eligible
-    )
-
+    # Soft: change to/from zero
     soft = (
-        changed
-        & ~hard
+        (before != after)
+        & ((before == 0) | (after == 0))
         & eligible
     )
 
-    inflections = changed & eligible
+    inflections = hard | soft
 
+    hard_count = int(np.sum(hard))
+    soft_count = int(np.sum(soft))
+
+    inflection_count = hard_count + soft_count
     comparison_count = int(np.sum(eligible))
-    inflection_count = int(np.sum(inflections))
 
     pip = (
-        100 * inflection_count / comparison_count
+        100.0 * inflection_count / comparison_count
         if comparison_count > 0
         else None
     )
 
+    inflection_indices = (
+        np.flatnonzero(inflections) + 1
+    )
+
     return {
         "pip": pip,
+        "hard_count": hard_count,
+        "soft_count": soft_count,
         "inflection_count": inflection_count,
         "comparison_count": comparison_count,
-        "hard_count": int(np.sum(hard)),
-        "soft_count": int(np.sum(soft)),
         "differences": differences,
         "states": states,
-        "inflection_indices": (
-            np.where(inflections)[0] + 1
-        )
+        "inflection_indices": inflection_indices,
+        "eligible_comparisons": eligible
     }
+
+
+def reference_nn_mask(beat_types):
+    """
+    Conservatively flag RR intervals bounded
+    by two MIT-BIH 'N' annotations.
+
+    This is an initial NN approximation,
+    not a complete sinus-rhythm validation.
+    """
+
+    symbols = np.asarray(beat_types)
+
+    if symbols.ndim != 1:
+        raise ValueError("Beat types must be 1D.")
+
+    return (
+        (symbols[:-1] == "N")
+        & (symbols[1:] == "N")
+    )
