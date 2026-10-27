@@ -14,6 +14,8 @@ from src.rpeak_detection import (
 )
 from src.hrf_analysis import (
     calculate_pip,
+    costa_beat_codes,
+    costa_hrf,
     reference_nn_mask
 )
 
@@ -105,10 +107,16 @@ if run_analysis:
                     ecg["beat_types"]
                 )
 
+                peaks = ecg["reference_peaks"]
+                codes = costa_beat_codes(ecg["beat_types"])
+
             elif source == "Reference all RR intervals":
 
                 rr = ecg["rr_intervals"]
                 mask = None
+
+                peaks = ecg["reference_peaks"]
+                codes = np.ones(len(peaks), dtype=int)
 
             else:
 
@@ -126,10 +134,20 @@ if run_analysis:
 
                 mask = None
 
+                peaks = detection["rpeaks"]
+                codes = np.ones(len(peaks), dtype=int)
+
             result = calculate_pip(
                 rr,
                 fs,
                 valid_mask=mask
+            )
+
+            # Reference HRF measures (Costa's method)
+            hrf = costa_hrf(
+                np.asarray(peaks) / fs,
+                codes,
+                fs
             )
 
             st.session_state["hrf_result"] = {
@@ -139,6 +157,7 @@ if run_analysis:
                 "rr": rr,
                 "mask": mask,
                 "result": result,
+                "hrf": hrf,
                 "fs": fs
             }
 
@@ -158,6 +177,7 @@ if "hrf_result" in st.session_state:
     rr = saved["rr"]
     mask = saved["mask"]
     result = saved["result"]
+    hrf = saved["hrf"]
 
     st.divider()
     st.subheader("HRF Results")
@@ -186,15 +206,12 @@ if "hrf_result" in st.session_state:
     # SUMMARY METRICS
     # ======================================
 
+    def percent(value):
+        return f"{value:.2f}%" if value is not None else "N/A"
+
     c1, c2, c3, c4 = st.columns(4)
 
-    pip_value = (
-        f"{result['pip']:.2f}%"
-        if result["pip"] is not None
-        else "N/A"
-    )
-
-    c1.metric("PIP", pip_value)
+    c1.metric("PIP", percent(hrf["pip"]))
     c2.metric("Hard Inflections", result["hard_count"])
     c3.metric("Soft Inflections", result["soft_count"])
     c4.metric(
@@ -202,10 +219,21 @@ if "hrf_result" in st.session_state:
         result["comparison_count"]
     )
 
+    c5, c6, c7, c8 = st.columns(4)
+
+    c5.metric("PNNSS", percent(hrf["pnnss"]))
+    c6.metric("PNNLS", percent(hrf["pnnls"]))
+    c7.metric(
+        "IALS",
+        f"{hrf['ials']:.3f}" if hrf["ials"] is not None else "N/A"
+    )
+    c8.metric("PAS", percent(hrf["pas"]))
+
     st.caption(
-        "PIP is calculated here as the percentage of "
-        "eligible consecutive interval comparisons "
-        "containing an inflection point."
+        "PIP, PNNSS and PNNLS are calculated as in Costa's "
+        "reference software (HRF.awk, PhysioNet). IALS and "
+        "PAS follow Costa et al. (2017). Hard/soft counts "
+        "and the charts below show every eligible comparison."
     )
 
     # ======================================
@@ -355,13 +383,19 @@ if "hrf_result" in st.session_state:
 
         st.markdown("""
         1. Obtain RR intervals from heartbeat locations.
-        2. Determine which intervals are eligible.
+        2. Keep intervals between normal beats that lie
+           between 0.3 and 1.8 seconds.
         3. Calculate differences between consecutive intervals.
         4. Convert differences into increasing, decreasing,
            or unchanged states.
-        5. Identify transitions between those states.
-        6. Divide the number of inflections by the number
-           of eligible comparisons and multiply by 100.
+        5. Mark inflection points: a change of direction
+           (hard) or a change to or from no change (soft).
+        6. Divide the number of inflection points by the
+           number of intervals between the first and last
+           inflection point, and multiply by 100.
+
+        This follows Costa's reference software, and the
+        implementation is checked against it in the tests.
         """)
 
     st.divider()

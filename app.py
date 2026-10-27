@@ -1,29 +1,18 @@
 
 import streamlit as st
 
+from src.ui import apply_theme
+
 st.set_page_config(
     page_title="ECG Insight",
-    page_icon="❤️",
+    page_icon=":material/monitor_heart:",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-st.markdown("""
-<style>
-.stApp {
-    background-color: #F4F7FB;
-}
+st.logo("assets/logo.svg", icon_image="assets/icon.svg", size="large")
 
-.block-container {
-    max-width: 1400px;
-    padding-top: 2rem;
-}
-
-h1, h2, h3 {
-    color: #10243A;
-}
-</style>
-""", unsafe_allow_html=True)
+apply_theme()
 
 # Website navigation
 dashboard = st.Page(
@@ -74,29 +63,5 @@ pg = st.navigation(
     ],
     position="top"
 )
-
-st.markdown("""
-<div style="
-    background: #10243A;
-    color: white;
-    padding: 20px 25px;
-    border-radius: 12px;
-    margin-bottom: 25px;
-">
-    <div style="
-        font-size: 27px;
-        font-weight: bold;
-        color: white;
-    ">
-        💚 ECG Insight
-    </div>
-    <div style="
-        font-size: 14px;
-        color: #B8D1DE;
-    ">
-        Heart Rate Fragmentation Analysis System
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
 pg.run()
